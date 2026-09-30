@@ -12798,7 +12798,10 @@ o+="</div>";
 o+="\n";
 return o;}
 /* ===== cloud + auth ===== */
-var CFG = window.KIDSCV_CONFIG || {};
+var CFG = Object.assign({}, window.KIDSCV_CONFIG || {});
+CFG.SUPABASE_URL = String(CFG.SUPABASE_URL || '').replace(/[^\x21-\x7E]/g, '').replace(/\/+$/, '');
+CFG.SUPABASE_ANON_KEY = String(CFG.SUPABASE_ANON_KEY || '').replace(/[^\x21-\x7E]/g, '').replace(/^-+|-+$/g, '');
+CFG.OTP_CHANNEL = String(CFG.OTP_CHANNEL || 'sms').replace(/[^a-z]/gi, '').toLowerCase();
 var SUPA_ESM = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 var KEEP = ['gender', 'stage', 'shapes', 'data', 'photo', 'career', 'fsPct', 'fw', 'hue', 'hobbyBg', 'wa'];
 var sb = null, session = null, rows = [], cur = null, mounted = false, saveTimer = null;
@@ -12949,7 +12952,7 @@ function brand() {
 function errBox() { return ui.err ? '<div role="alert" style="font-size: 16px; line-height: 1.6; color: #9F1239; background: #FFF1F3; border: 1px solid #F3C4CF; border-radius: 12px; padding: 10px 14px">' + ET(ui.err) + '</div>' : ''; }
 function LOGIN() {
   if (ui.phase === 'boot') return wrap('<div style="font-size: 18px; color: #4B5563">جارٍ التحميل…</div>');
-  if (ui.phase === 'nocfg') return wrap('<div style="' + CARD + '">' + brand() + '<p style="margin: 0; font-size: 17px; line-height: 1.8">لم يتم إعداد الاتصال بـ Supabase بعد. افتح ملف <b dir="ltr">config.js</b> وضع فيه رابط المشروع والمفتاح العام، كما في دليل الإعداد.</p></div>');
+  if (ui.phase === 'nocfg') return wrap('<div style="' + CARD + '">' + brand() + '<p style="margin: 0; font-size: 17px; line-height: 1.8">لم يتم إعداد الاتصال بـ Supabase بعد. افتح ملف <b dir="ltr">config.js</b> وتأكد أن رابط المشروع صحيح، وأن المفتاح العام (anon / publishable) منسوخ كاملاً بين علامتي الاقتباس.</p></div>');
   if (ui.phase === 'loading') return wrap('<div style="font-size: 18px; color: #4B5563">جارٍ تحميل السير الذاتية…</div>');
   if (ui.phase === 'error') return wrap('<div style="' + CARD + '">' + brand() + errBox() + '<button type="button" data-on-click="' + R(function () { loadRows(); }) + '" style="' + BTN1 + '">إعادة المحاولة</button><button type="button" data-on-click="' + R(logout) + '" style="' + BTNL + '">خروج</button></div>');
   var body;
@@ -13017,7 +13020,7 @@ window.addEventListener('beforeunload', function () { if (saveTimer) flushSave()
   try { window.localStorage.removeItem(KEY + ':main'); } catch (e) {}
   app = new App();
   render();
-  if (!CFG.SUPABASE_URL || !CFG.SUPABASE_ANON_KEY || /YOUR-/.test(CFG.SUPABASE_URL + CFG.SUPABASE_ANON_KEY)) { ui.phase = 'nocfg'; render(); return; }
+  if (!/^https:\/\/.+\.supabase\.co$/.test(CFG.SUPABASE_URL) || CFG.SUPABASE_ANON_KEY.length < 20 || /YOUR-/.test(CFG.SUPABASE_URL + CFG.SUPABASE_ANON_KEY)) { ui.phase = 'nocfg'; render(); return; }
   try {
     var mod = await import(SUPA_ESM);
     sb = mod.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, { auth: { persistSession: true, autoRefreshToken: true } });
