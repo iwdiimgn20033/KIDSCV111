@@ -12802,6 +12802,8 @@ var CFG = Object.assign({}, window.KIDSCV_CONFIG || {});
 CFG.SUPABASE_URL = String(CFG.SUPABASE_URL || '').replace(/[^\x21-\x7E]/g, '').replace(/\/+$/, '');
 CFG.SUPABASE_ANON_KEY = String(CFG.SUPABASE_ANON_KEY || '').replace(/[^\x21-\x7E]/g, '').replace(/^-+|-+$/g, '');
 CFG.OTP_CHANNEL = String(CFG.OTP_CHANNEL || 'sms').replace(/[^a-z]/gi, '').toLowerCase();
+var LOCAL = CFG.LOGIN !== true; // شاشة الدخول معطّلة ما لم يُكتب LOGIN: true في config.js
+var LKEY = 'kidscv-local-v1';
 var SUPA_ESM = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 var KEEP = ['gender', 'stage', 'shapes', 'data', 'photo', 'career', 'fsPct', 'fw', 'hue', 'hobbyBg', 'wa'];
 var sb = null, session = null, rows = [], cur = null, mounted = false, saveTimer = null;
@@ -12836,6 +12838,7 @@ function photoResize(e, comp) {
 }
 function pick(st) { var o = {}; KEEP.forEach(function (k) { if (st[k] !== undefined) o[k] = st[k]; }); return o; }
 function queueCloud() {
+  if (LOCAL) { try { window.localStorage.setItem(LKEY, JSON.stringify(pick(app.state || {}))); } catch (e) {} return; }
   if (!cur) return;
   ui.save = 'جارٍ الحفظ…';
   clearTimeout(saveTimer);
@@ -12848,7 +12851,8 @@ async function flushSave() {
   var payload = pick(app.state || {});
   var row = rows.find(function (x) { return x.id === cur; });
   if (row) row.data = payload;
-  var res = await sb.from('student_cvs').update({ data: payload, updated_at: new Date().toISOString() }).eq('id', cur);
+  var res = await sb.rpc('kid_save', { p_token: session.token, p_id: cur, p_data: payload });
+  if (res.error && /BAD_SESSION/.test(res.error.message)) return sessionExpired();
   ui.save = res.error ? 'تعذّر الحفظ، تحقّق من الاتصال' : 'تم الحفظ';
   schedule();
 }
@@ -12862,22 +12866,32 @@ function selectRow(id) {
 }
 async function loadRows() {
   ui.phase = 'loading'; schedule();
-  var res = await sb.from('student_cvs').select('id,data,created_at').order('created_at', { ascending: true });
-  if (res.error) { ui.phase = 'error'; ui.err = 'تعذّر تحميل السير الذاتية: ' + res.error.message; schedule(); return; }
+  var res = await sb.rpc('kid_list', { p_token: session.token });
+  if (res.error) {
+    if (/BAD_SESSION/.test(res.error.message)) return sessionExpired();
+    ui.phase = 'error'; ui.err = 'تعذّر تحميل السير الذاتية: ' + res.error.message; schedule(); return;
+  }
   rows = res.data || [];
   if (!rows.length) {
-    var ins = await sb.from('student_cvs').insert({ data: { data: {} } }).select('id,data,created_at').single();
+    var ins = await sb.rpc('kid_new', { p_token: session.token, p_data: { data: {} } });
     if (ins.error) { ui.phase = 'error'; ui.err = 'تعذّر إنشاء سيرة جديدة: ' + ins.error.message; schedule(); return; }
     rows = [ins.data];
   }
   ui.phase = 'app';
   selectRow(rows[0].id);
 }
+function sessionExpired() {
+  clearSession(); resetAll(); ui.err = 'انتهت الجلسة، ادخل مرة أخرى.'; schedule();
+}
+var SKEY = 'kidscv-session-v1';
+function saveSession() { try { window.localStorage.setItem(SKEY, JSON.stringify(session)); } catch (e) {} }
+function clearSession() { session = null; try { window.localStorage.removeItem(SKEY); } catch (e) {} }
+function readSession() { try { var v = JSON.parse(window.localStorage.getItem(SKEY) || 'null'); return v && v.token ? v : null; } catch (e) { return null; } }
 async function newStudent() {
   await flushSave();
   var st = app.state || {};
-  var ins = await sb.from('student_cvs').insert({ data: { gender: st.gender || 'g', stage: st.stage || 'kg', data: { phone: ((st.data || {}).phone || '') } } }).select('id,data,created_at').single();
-  if (ins.error) { ui.save = 'تعذّر إضافة طالب: ' + ins.error.message; schedule(); return; }
+  var ins = await sb.rpc('kid_new', { p_token: session.token, p_data: { gender: st.gender || 'g', stage: st.stage || 'kg', data: {} } });
+  if (ins.error) { ui.save = /TOO_MANY/.test(ins.error.message) ? 'وصلت إلى الحد الأقصى (20 سيرة).' : 'تعذّر إضافة طالب: ' + ins.error.message; schedule(); return; }
   rows.push(ins.data);
   selectRow(ins.data.id);
 }
@@ -12887,14 +12901,15 @@ async function deleteStudent() {
   var nm = (((row || {}).data || {}).data || {}).name || 'هذا الطالب';
   if (!window.confirm('حذف سيرة ' + nm + ' نهائياً؟')) return;
   clearTimeout(saveTimer); saveTimer = null;
-  var res = await sb.from('student_cvs').delete().eq('id', cur);
+  var res = await sb.rpc('kid_delete', { p_token: session.token, p_id: cur });
   if (res.error) { ui.save = 'تعذّر الحذف: ' + res.error.message; schedule(); return; }
   rows = rows.filter(function (x) { return x.id !== cur; });
   selectRow(rows[0].id);
 }
 async function logout() {
   await flushSave();
-  await sb.auth.signOut();
+  try { await sb.rpc('kid_logout', { p_token: session.token }); } catch (e) {}
+  clearSession(); resetAll(); schedule();
 }
 function resetAll() {
   rows = []; cur = null;
@@ -12923,23 +12938,25 @@ async function submitAuth() {
   if (p.length < 6) { ui.err = 'كلمة المرور يجب أن تكون 6 أحرف أو أرقام على الأقل.'; schedule(); return; }
   if (ui.step === 'signup' && p !== String(ui.pass2 || '')) { ui.err = 'كلمتا المرور غير متطابقتين.'; schedule(); return; }
   ui.busy = true; ui.err = ''; schedule();
-  var res = ui.step === 'signup'
-    ? await sb.auth.signUp({ email: userEmail(u), password: p, options: { data: { username: u } } })
-    : await sb.auth.signInWithPassword({ email: userEmail(u), password: p });
+  var res = await sb.rpc(ui.step === 'signup' ? 'kid_register' : 'kid_login', { p_user: u, p_pass: p });
   ui.busy = false;
-  if (res.error) { ui.err = authError(res.error.message); schedule(); return; }
-  if (!res.data || !res.data.session) {
-    if (ui.step === 'signup' && res.data && res.data.user && Array.isArray(res.data.user.identities) && res.data.user.identities.length === 0) { ui.err = authError('already registered'); schedule(); return; }
-    ui.err = authError('email not confirmed'); schedule(); return;
+  if (res.error) {
+    var m = res.error.message || '';
+    ui.err = /USERNAME_TAKEN/.test(m) ? 'اسم المستخدم هذا مستخدم من قبل. اختر اسماً آخر، أو اضغط «دخول» إذا كان حسابك.'
+      : /LOCKED/.test(m) ? 'محاولات خاطئة كثيرة. حاول مرة أخرى بعد 10 دقائق.'
+      : /BAD_USERNAME/.test(m) ? 'اسم المستخدم يجب أن يكون من 3 إلى 30 حرفاً إنجليزياً أو رقماً، بدون مسافات.'
+      : /SHORT_PASSWORD/.test(m) ? 'كلمة المرور يجب أن تكون 6 أحرف أو أرقام على الأقل.'
+      : /kid_(register|login)|function|schema cache/i.test(m) ? 'قاعدة البيانات غير مجهّزة بعد: نفّذي ملف accounts-setup.sql في Supabase (SQL Editor).'
+      : 'حدث خطأ: ' + m;
+    schedule(); return;
   }
-  session = res.data.session;
+  if (!res.data) { ui.err = 'اسم المستخدم أو كلمة المرور غير صحيحة.'; schedule(); return; }
+  session = { token: res.data, user: u };
+  saveSession();
   ui.pass = ''; ui.pass2 = '';
   await loadRows();
 }
-function currentUsername() {
-  var e = session && session.user && session.user.email;
-  return e ? String(e).split('@')[0] : '';
-}
+function currentUsername() { return (session && session.user) || ''; }
 
 /* ===== views ===== */
 var CARD = 'width: 100%; max-width: 480px; background: #FFFFFF; border: 1px solid #E5E7EB; border-radius: 24px; padding: 32px; display: flex; flex-direction: column; gap: 16px; box-sizing: border-box';
@@ -12995,7 +13012,7 @@ function TOP() {
     + '<button type="button" data-on-click="' + R(logout) + '" style="' + B + '; border: 1.5px solid #FFFFFF; background: #FFFFFF; color: #1F2A37">خروج</button></div></div>';
 }
 function VIEW() {
-  if (ui.phase === 'app' && app && cur) return TOP() + TPL(app.renderVals());
+  if (ui.phase === 'app' && app && cur) return (LOCAL ? '' : TOP()) + TPL(app.renderVals());
   return LOGIN();
 }
 var root = document.getElementById('root');
@@ -13020,17 +13037,20 @@ window.addEventListener('beforeunload', function () { if (saveTimer) flushSave()
   try { window.localStorage.removeItem(KEY + ':main'); } catch (e) {}
   app = new App();
   render();
+  if (LOCAL) {
+    var saved = null;
+    try { saved = JSON.parse(window.localStorage.getItem(LKEY) || 'null'); } catch (e) { saved = null; }
+    rows = [{ id: 'local', data: saved || {} }];
+    ui.phase = 'app';
+    selectRow('local');
+    return;
+  }
   if (!/^https:\/\/.+\.supabase\.co$/.test(CFG.SUPABASE_URL) || CFG.SUPABASE_ANON_KEY.length < 20 || /YOUR-/.test(CFG.SUPABASE_URL + CFG.SUPABASE_ANON_KEY)) { ui.phase = 'nocfg'; render(); return; }
   try {
     var mod = await import(SUPA_ESM);
-    sb = mod.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, { auth: { persistSession: true, autoRefreshToken: true } });
+    sb = mod.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
   } catch (e) { ui.phase = 'error'; ui.err = 'تعذّر تحميل مكتبة Supabase. تحقّق من الاتصال بالإنترنت.'; render(); return; }
-  var got = await sb.auth.getSession();
-  session = got.data && got.data.session;
-  sb.auth.onAuthStateChange(function (ev, s) {
-    session = s;
-    if (ev === 'SIGNED_OUT') { resetAll(); schedule(); }
-  });
+  session = readSession();
   if (session) await loadRows(); else { ui.phase = 'login'; render(); }
 })();
 
