@@ -1,0 +1,14 @@
+{
+  "name": "jordanian-school-cv",
+  "version": "1.0.0",
+  "private": true,
+  "description": "صانع السيرة الذاتية للطلاب – المدارس الأردنية",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {}
+}
