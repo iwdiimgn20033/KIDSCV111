@@ -12805,7 +12805,7 @@ CFG.OTP_CHANNEL = String(CFG.OTP_CHANNEL || 'sms').replace(/[^a-z]/gi, '').toLow
 var SUPA_ESM = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 var KEEP = ['gender', 'stage', 'shapes', 'data', 'photo', 'career', 'fsPct', 'fw', 'hue', 'hobbyBg', 'wa'];
 var sb = null, session = null, rows = [], cur = null, mounted = false, saveTimer = null;
-var ui = { phase: 'boot', cc: String(CFG.DEFAULT_COUNTRY || '974'), phone: '', code: '', step: 'phone', full: '', err: '', info: '', busy: false, cool: 0, save: '' };
+var ui = { phase: 'boot', user: '', pass: '', pass2: '', step: 'login', err: '', busy: false, save: '' };
 var app;
 
 class App extends Component {
@@ -12866,7 +12866,7 @@ async function loadRows() {
   if (res.error) { ui.phase = 'error'; ui.err = 'تعذّر تحميل السير الذاتية: ' + res.error.message; schedule(); return; }
   rows = res.data || [];
   if (!rows.length) {
-    var ins = await sb.from('student_cvs').insert({ data: { data: { phone: (session.user.phone || '') } } }).select('id,data,created_at').single();
+    var ins = await sb.from('student_cvs').insert({ data: { data: {} } }).select('id,data,created_at').single();
     if (ins.error) { ui.phase = 'error'; ui.err = 'تعذّر إنشاء سيرة جديدة: ' + ins.error.message; schedule(); return; }
     rows = [ins.data];
   }
@@ -12899,42 +12899,46 @@ async function logout() {
 function resetAll() {
   rows = []; cur = null;
   if (app) app.state = {};
-  ui.phase = 'login'; ui.step = 'phone'; ui.code = ''; ui.err = ''; ui.info = ''; ui.save = '';
+  ui.phase = 'login'; ui.step = 'login'; ui.pass = ''; ui.pass2 = ''; ui.err = ''; ui.save = '';
 }
-function fullPhone() {
-  var n = normDigits(ui.phone).replace(/^0+/, '');
-  var cc = normDigits(ui.cc);
-  if (n.indexOf(cc) === 0 && n.length > 9) n = n.slice(cc.length);
-  return '+' + cc + n;
+var EMAIL_DOMAIN = 'students.jordanianschoolcv.store';
+function normUser(v) {
+  return String(v || '').replace(/[٠-٩]/g, function (d) { return String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)); }).replace(/[۰-۹]/g, function (d) { return String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)); }).trim().toLowerCase();
 }
-function tickCool() {
-  if (ui.cool <= 0) return;
-  ui.cool--; schedule();
-  setTimeout(tickCool, 1000);
+function userEmail(u) { return u + '@' + EMAIL_DOMAIN; }
+function authError(msg) {
+  msg = String(msg || '');
+  if (/invalid login credentials/i.test(msg)) return 'اسم المستخدم أو كلمة المرور غير صحيحة.';
+  if (/already registered|already exists/i.test(msg)) return 'اسم المستخدم هذا مستخدم من قبل. اختر اسماً آخر، أو اضغط «دخول» إذا كان حسابك.';
+  if (/email not confirmed/i.test(msg)) return 'الحساب يحتاج تفعيلاً. على المسؤول إيقاف خيار «Confirm email» في إعدادات Supabase.';
+  if (/password/i.test(msg) && /(6|characters|short)/i.test(msg)) return 'كلمة المرور قصيرة، اكتب 6 أحرف أو أرقام على الأقل.';
+  if (/signups? not allowed|signup is disabled/i.test(msg)) return 'إنشاء الحسابات موقوف في إعدادات Supabase.';
+  if (/rate limit/i.test(msg)) return 'محاولات كثيرة، انتظر قليلاً ثم حاول مرة أخرى.';
+  return 'حدث خطأ: ' + msg;
 }
-async function sendCode() {
+async function submitAuth() {
   if (ui.busy) return;
-  var full = fullPhone();
-  if (full.length < 11 || full.length > 16) { ui.err = 'أدخل رقم جوال ولي الأمر كاملاً.'; schedule(); return; }
+  var u = normUser(ui.user), p = String(ui.pass || '');
+  if (!/^[a-z0-9._-]{3,30}$/.test(u)) { ui.err = 'اسم المستخدم يجب أن يكون من 3 إلى 30 حرفاً إنجليزياً أو رقماً (مثل رقم الطالب)، بدون مسافات.'; schedule(); return; }
+  if (p.length < 6) { ui.err = 'كلمة المرور يجب أن تكون 6 أحرف أو أرقام على الأقل.'; schedule(); return; }
+  if (ui.step === 'signup' && p !== String(ui.pass2 || '')) { ui.err = 'كلمتا المرور غير متطابقتين.'; schedule(); return; }
   ui.busy = true; ui.err = ''; schedule();
-  var res = await sb.auth.signInWithOtp({ phone: full, options: { channel: CFG.OTP_CHANNEL === 'whatsapp' ? 'whatsapp' : 'sms' } });
+  var res = ui.step === 'signup'
+    ? await sb.auth.signUp({ email: userEmail(u), password: p, options: { data: { username: u } } })
+    : await sb.auth.signInWithPassword({ email: userEmail(u), password: p });
   ui.busy = false;
-  if (res.error) { ui.err = 'تعذّر إرسال الرمز: ' + res.error.message; schedule(); return; }
-  ui.full = full; ui.step = 'code'; ui.code = '';
-  ui.info = 'أرسلنا رمز التحقق ' + (CFG.OTP_CHANNEL === 'whatsapp' ? 'عبر واتساب' : 'برسالة نصية') + ' إلى ' + full;
-  ui.cool = 60; setTimeout(tickCool, 1000);
-  schedule();
-}
-async function verifyCode() {
-  if (ui.busy) return;
-  var token = normDigits(ui.code);
-  if (token.length < 4) { ui.err = 'أدخل الرمز الذي وصلك.'; schedule(); return; }
-  ui.busy = true; ui.err = ''; schedule();
-  var res = await sb.auth.verifyOtp({ phone: ui.full, token: token, type: 'sms' });
-  ui.busy = false;
-  if (res.error) { ui.err = 'الرمز غير صحيح أو انتهت صلاحيته. اطلب رمزاً جديداً.'; schedule(); return; }
+  if (res.error) { ui.err = authError(res.error.message); schedule(); return; }
+  if (!res.data || !res.data.session) {
+    if (ui.step === 'signup' && res.data && res.data.user && Array.isArray(res.data.user.identities) && res.data.user.identities.length === 0) { ui.err = authError('already registered'); schedule(); return; }
+    ui.err = authError('email not confirmed'); schedule(); return;
+  }
   session = res.data.session;
+  ui.pass = ''; ui.pass2 = '';
   await loadRows();
+}
+function currentUsername() {
+  var e = session && session.user && session.user.email;
+  return e ? String(e).split('@')[0] : '';
 }
 
 /* ===== views ===== */
@@ -12955,27 +12959,23 @@ function LOGIN() {
   if (ui.phase === 'nocfg') return wrap('<div style="' + CARD + '">' + brand() + '<p style="margin: 0; font-size: 17px; line-height: 1.8">لم يتم إعداد الاتصال بـ Supabase بعد. افتح ملف <b dir="ltr">config.js</b> وتأكد أن رابط المشروع صحيح، وأن المفتاح العام (anon / publishable) منسوخ كاملاً بين علامتي الاقتباس.</p></div>');
   if (ui.phase === 'loading') return wrap('<div style="font-size: 18px; color: #4B5563">جارٍ تحميل السير الذاتية…</div>');
   if (ui.phase === 'error') return wrap('<div style="' + CARD + '">' + brand() + errBox() + '<button type="button" data-on-click="' + R(function () { loadRows(); }) + '" style="' + BTN1 + '">إعادة المحاولة</button><button type="button" data-on-click="' + R(logout) + '" style="' + BTNL + '">خروج</button></div>');
-  var body;
-  if (ui.step === 'phone') {
-    body = '<form data-on-submit="' + R(sendCode) + '" style="display: flex; flex-direction: column; gap: 14px">'
-      + '<p style="margin: 0; font-size: 17px; line-height: 1.7; color: #374151">أدخل رقم جوال ولي الأمر، وسيصلك رمز تحقق ' + (CFG.OTP_CHANNEL === 'whatsapp' ? 'على واتساب' : 'برسالة نصية') + '.</p>'
-      + '<label for="lg-phone" style="font-size: 17px; font-weight: 700">رقم جوال ولي الأمر</label>'
-      + '<div dir="ltr" style="display: flex; gap: 8px"><input id="lg-cc" aria-label="رمز الدولة" inputmode="numeric" value="' + EA(ui.cc) + '" data-on-input="' + R(function (e) { ui.cc = e.target.value; ui.err = ''; }) + '" style="' + INP + '; width: 96px; flex-shrink: 0"><input id="lg-phone" type="tel" inputmode="numeric" autocomplete="tel" placeholder="50445575" value="' + EA(ui.phone) + '" data-on-input="' + R(function (e) { ui.phone = e.target.value; ui.err = ''; }) + '" style="' + INP + '; flex: 1; min-width: 0"></div>'
-      + errBox()
-      + '<button type="submit" style="' + BTN1 + '"' + (ui.busy ? ' disabled' : '') + '>' + (ui.busy ? 'جارٍ الإرسال…' : 'إرسال رمز التحقق') + '</button></form>';
-  } else {
-    body = '<form data-on-submit="' + R(verifyCode) + '" style="display: flex; flex-direction: column; gap: 14px">'
-      + '<p role="status" style="margin: 0; font-size: 16px; line-height: 1.7; color: #166534; background: #F0FDF4; border: 1px solid #BBF7D0; border-radius: 12px; padding: 10px 14px">' + ET(ui.info) + '</p>'
-      + '<label for="lg-code" style="font-size: 17px; font-weight: 700">رمز التحقق</label>'
-      + '<input id="lg-code" inputmode="numeric" autocomplete="one-time-code" maxlength="8" dir="ltr" value="' + EA(ui.code) + '" data-on-input="' + R(function (e) { ui.code = e.target.value; ui.err = ''; }) + '" style="' + INP + '; letter-spacing: 10px">'
-      + errBox()
-      + '<button type="submit" style="' + BTN1 + '"' + (ui.busy ? ' disabled' : '') + '>' + (ui.busy ? 'جارٍ التحقق…' : 'دخول') + '</button>'
-      + '<div style="display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px">'
-      + '<button type="button" data-on-click="' + R(function () { ui.step = 'phone'; ui.err = ''; schedule(); }) + '" style="' + BTNL + '">تغيير الرقم</button>'
-      + (ui.cool > 0 ? '<span style="font-size: 15px; color: #6B7280; align-self: center">إعادة الإرسال بعد ' + ui.cool + ' ثانية</span>'
-                     : '<button type="button" data-on-click="' + R(sendCode) + '" style="' + BTNL + '">إعادة إرسال الرمز</button>')
-      + '</div></form>';
-  }
+  var su = ui.step === 'signup';
+  var LBL = 'font-size: 16px; font-weight: 700';
+  var FIN = INP.replace('font-size: 22px', 'font-size: 19px').replace('letter-spacing: 2px', 'letter-spacing: 0');
+  var body = '<div role="group" aria-label="نوع الدخول" style="display: flex; gap: 4px; background: #F3F4F6; border-radius: 12px; padding: 4px">'
+    + '<button type="button" aria-pressed="' + (ui.step === 'login') + '" data-on-click="' + R(function () { ui.step = 'login'; ui.err = ''; schedule(); }) + '" style="flex: 1; min-height: 44px; border-radius: 10px; border: 0; font-family: inherit; font-size: 16px; font-weight: 700; cursor: pointer; background: ' + (ui.step === 'login' ? '#FFFFFF' : 'transparent') + '; color: ' + (ui.step === 'login' ? '#1F2A37' : '#4B5563') + '">دخول</button>' + '<button type="button" aria-pressed="' + (ui.step === 'signup') + '" data-on-click="' + R(function () { ui.step = 'signup'; ui.err = ''; schedule(); }) + '" style="flex: 1; min-height: 44px; border-radius: 10px; border: 0; font-family: inherit; font-size: 16px; font-weight: 700; cursor: pointer; background: ' + (ui.step === 'signup' ? '#FFFFFF' : 'transparent') + '; color: ' + (ui.step === 'signup' ? '#1F2A37' : '#4B5563') + '">حساب جديد</button>'
+    + '</div>'
+    + '<form data-on-submit="' + R(submitAuth) + '" style="display: flex; flex-direction: column; gap: 12px">'
+    + '<p style="margin: 0; font-size: 15px; line-height: 1.7; color: #374151">' + (su ? 'اختر اسم مستخدم (يمكن أن يكون رقم الطالب) وكلمة مرور، واحفظهما جيداً للرجوع إلى سيرتك.' : 'اكتب اسم المستخدم وكلمة المرور اللذين اخترتهما عند إنشاء الحساب.') + '</p>'
+    + '<label for="lg-user" style="' + LBL + '">اسم المستخدم أو رقم الطالب</label>'
+    + '<input id="lg-user" dir="ltr" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="مثال: 20231234" value="' + EA(ui.user) + '" data-on-input="' + R(function (e) { ui.user = e.target.value; ui.err = ''; }) + '" style="' + FIN + '">'
+    + '<label for="lg-pass" style="' + LBL + '">كلمة المرور</label>'
+    + '<input id="lg-pass" type="password" dir="ltr" autocomplete="' + (su ? 'new-password' : 'current-password') + '" value="' + EA(ui.pass) + '" data-on-input="' + R(function (e) { ui.pass = e.target.value; ui.err = ''; }) + '" style="' + FIN + '">'
+    + (su ? '<label for="lg-pass2" style="' + LBL + '">تأكيد كلمة المرور</label><input id="lg-pass2" type="password" dir="ltr" autocomplete="new-password" value="' + EA(ui.pass2) + '" data-on-input="' + R(function (e) { ui.pass2 = e.target.value; ui.err = ''; }) + '" style="' + FIN + '">' : '')
+    + errBox()
+    + '<button type="submit" style="' + BTN1 + '"' + (ui.busy ? ' disabled' : '') + '>' + (ui.busy ? 'لحظة…' : (su ? 'إنشاء الحساب' : 'دخول')) + '</button>'
+    + (su ? '' : '<p style="margin: 0; font-size: 13px; line-height: 1.7; color: #6B7280">نسيت كلمة المرور؟ راجع معلمك.</p>')
+    + '</form>';
   return wrap('<div style="' + CARD + '">' + brand() + body + '</div>');
 }
 function TOP() {
@@ -12991,7 +12991,7 @@ function TOP() {
     + (rows.length > 1 ? '<button type="button" data-on-click="' + R(deleteStudent) + '" style="' + B + '; border: 0; background: transparent; color: #FCA5A5; text-decoration: underline">حذف</button>' : '')
     + '</div><div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap">'
     + '<span role="status" style="color: #D1D5DB">' + ET(ui.save) + '</span>'
-    + '<span dir="ltr" style="color: #E5E7EB">' + ET((session && session.user && session.user.phone) ? '+' + String(session.user.phone).replace(/^\+/, '') : '') + '</span>'
+    + '<span dir="ltr" style="color: #E5E7EB">' + ET(currentUsername()) + '</span>'
     + '<button type="button" data-on-click="' + R(logout) + '" style="' + B + '; border: 1.5px solid #FFFFFF; background: #FFFFFF; color: #1F2A37">خروج</button></div></div>';
 }
 function VIEW() {
