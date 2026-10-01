@@ -12802,7 +12802,7 @@ var CFG = Object.assign({}, window.KIDSCV_CONFIG || {});
 CFG.SUPABASE_URL = String(CFG.SUPABASE_URL || '').replace(/[^\x21-\x7E]/g, '').replace(/\/+$/, '');
 CFG.SUPABASE_ANON_KEY = String(CFG.SUPABASE_ANON_KEY || '').replace(/[^\x21-\x7E]/g, '').replace(/^-+|-+$/g, '');
 CFG.OTP_CHANNEL = String(CFG.OTP_CHANNEL || 'sms').replace(/[^a-z]/gi, '').toLowerCase();
-var LOCAL = CFG.LOGIN !== true; // شاشة الدخول معطّلة ما لم يُكتب LOGIN: true في config.js
+var LOCAL = CFG.LOGIN === false; // لإيقاف شاشة الدخول اكتبي LOGIN: false في config.js
 var LKEY = 'kidscv-local-v1';
 var SUPA_ESM = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 var KEEP = ['gender', 'stage', 'shapes', 'data', 'photo', 'career', 'fsPct', 'fw', 'hue', 'hobbyBg', 'wa'];
@@ -12879,6 +12879,7 @@ async function loadRows() {
   }
   ui.phase = 'app';
   selectRow(rows[0].id);
+  if (ui.welcome) { ui.save = ui.welcome; ui.welcome = ''; schedule(); }
 }
 function sessionExpired() {
   clearSession(); resetAll(); ui.err = 'انتهت الجلسة، ادخل مرة أخرى.'; schedule();
@@ -12935,23 +12936,24 @@ async function submitAuth() {
   if (ui.busy) return;
   var u = normUser(ui.user), p = String(ui.pass || '');
   if (!/^[a-z0-9._-]{3,30}$/.test(u)) { ui.err = 'اسم المستخدم يجب أن يكون من 3 إلى 30 حرفاً إنجليزياً أو رقماً (مثل رقم الطالب)، بدون مسافات.'; schedule(); return; }
-  if (p.length < 6) { ui.err = 'كلمة المرور يجب أن تكون 6 أحرف أو أرقام على الأقل.'; schedule(); return; }
-  if (ui.step === 'signup' && p !== String(ui.pass2 || '')) { ui.err = 'كلمتا المرور غير متطابقتين.'; schedule(); return; }
+  p = normDigits(p) || p;
+  if (p.length < 4) { ui.err = 'الرمز السري يجب أن يكون 4 أرقام على الأقل.'; schedule(); return; }
   ui.busy = true; ui.err = ''; schedule();
-  var res = await sb.rpc(ui.step === 'signup' ? 'kid_register' : 'kid_login', { p_user: u, p_pass: p });
+  var res = await sb.rpc('kid_enter', { p_user: u, p_pass: p });
   ui.busy = false;
   if (res.error) {
     var m = res.error.message || '';
     ui.err = /USERNAME_TAKEN/.test(m) ? 'اسم المستخدم هذا مستخدم من قبل. اختر اسماً آخر، أو اضغط «دخول» إذا كان حسابك.'
       : /LOCKED/.test(m) ? 'محاولات خاطئة كثيرة. حاول مرة أخرى بعد 10 دقائق.'
       : /BAD_USERNAME/.test(m) ? 'اسم المستخدم يجب أن يكون من 3 إلى 30 حرفاً إنجليزياً أو رقماً، بدون مسافات.'
-      : /SHORT_PASSWORD/.test(m) ? 'كلمة المرور يجب أن تكون 6 أحرف أو أرقام على الأقل.'
-      : /kid_(register|login)|function|schema cache/i.test(m) ? 'قاعدة البيانات غير مجهّزة بعد: نفّذي ملف accounts-setup.sql في Supabase (SQL Editor).'
+      : /SHORT_PASSWORD/.test(m) ? 'الرمز السري يجب أن يكون 4 أرقام على الأقل.'
+      : /kid_(enter|register|login)|function|schema cache/i.test(m) ? 'قاعدة البيانات غير مجهّزة بعد: نفّذي ملف accounts-setup.sql في Supabase (SQL Editor).'
       : 'حدث خطأ: ' + m;
     schedule(); return;
   }
-  if (!res.data) { ui.err = 'اسم المستخدم أو كلمة المرور غير صحيحة.'; schedule(); return; }
-  session = { token: res.data, user: u };
+  if (!res.data || !res.data.token) { ui.err = 'الرمز السري غير صحيح لهذا الاسم. إذا كان هذا أول دخول لك، اختر اسماً آخر لأن هذا الاسم مستخدم من قبل.'; schedule(); return; }
+  session = { token: res.data.token, user: u };
+  ui.welcome = res.data.created ? 'تم إنشاء حسابك باسم «' + u + '». تذكّر الاسم والرمز للدخول في المرة القادمة.' : '';
   saveSession();
   ui.pass = ''; ui.pass2 = '';
   await loadRows();
@@ -12976,22 +12978,17 @@ function LOGIN() {
   if (ui.phase === 'nocfg') return wrap('<div style="' + CARD + '">' + brand() + '<p style="margin: 0; font-size: 17px; line-height: 1.8">لم يتم إعداد الاتصال بـ Supabase بعد. افتح ملف <b dir="ltr">config.js</b> وتأكد أن رابط المشروع صحيح، وأن المفتاح العام (anon / publishable) منسوخ كاملاً بين علامتي الاقتباس.</p></div>');
   if (ui.phase === 'loading') return wrap('<div style="font-size: 18px; color: #4B5563">جارٍ تحميل السير الذاتية…</div>');
   if (ui.phase === 'error') return wrap('<div style="' + CARD + '">' + brand() + errBox() + '<button type="button" data-on-click="' + R(function () { loadRows(); }) + '" style="' + BTN1 + '">إعادة المحاولة</button><button type="button" data-on-click="' + R(logout) + '" style="' + BTNL + '">خروج</button></div>');
-  var su = ui.step === 'signup';
   var LBL = 'font-size: 16px; font-weight: 700';
   var FIN = INP.replace('font-size: 22px', 'font-size: 19px').replace('letter-spacing: 2px', 'letter-spacing: 0');
-  var body = '<div role="group" aria-label="نوع الدخول" style="display: flex; gap: 4px; background: #F3F4F6; border-radius: 12px; padding: 4px">'
-    + '<button type="button" aria-pressed="' + (ui.step === 'login') + '" data-on-click="' + R(function () { ui.step = 'login'; ui.err = ''; schedule(); }) + '" style="flex: 1; min-height: 44px; border-radius: 10px; border: 0; font-family: inherit; font-size: 16px; font-weight: 700; cursor: pointer; background: ' + (ui.step === 'login' ? '#FFFFFF' : 'transparent') + '; color: ' + (ui.step === 'login' ? '#1F2A37' : '#4B5563') + '">دخول</button>' + '<button type="button" aria-pressed="' + (ui.step === 'signup') + '" data-on-click="' + R(function () { ui.step = 'signup'; ui.err = ''; schedule(); }) + '" style="flex: 1; min-height: 44px; border-radius: 10px; border: 0; font-family: inherit; font-size: 16px; font-weight: 700; cursor: pointer; background: ' + (ui.step === 'signup' ? '#FFFFFF' : 'transparent') + '; color: ' + (ui.step === 'signup' ? '#1F2A37' : '#4B5563') + '">حساب جديد</button>'
-    + '</div>'
-    + '<form data-on-submit="' + R(submitAuth) + '" style="display: flex; flex-direction: column; gap: 12px">'
-    + '<p style="margin: 0; font-size: 15px; line-height: 1.7; color: #374151">' + (su ? 'اختر اسم مستخدم (يمكن أن يكون رقم الطالب) وكلمة مرور، واحفظهما جيداً للرجوع إلى سيرتك.' : 'اكتب اسم المستخدم وكلمة المرور اللذين اخترتهما عند إنشاء الحساب.') + '</p>'
-    + '<label for="lg-user" style="' + LBL + '">اسم المستخدم أو رقم الطالب</label>'
-    + '<input id="lg-user" dir="ltr" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="مثال: 20231234" value="' + EA(ui.user) + '" data-on-input="' + R(function (e) { ui.user = e.target.value; ui.err = ''; }) + '" style="' + FIN + '">'
-    + '<label for="lg-pass" style="' + LBL + '">كلمة المرور</label>'
-    + '<input id="lg-pass" type="password" dir="ltr" autocomplete="' + (su ? 'new-password' : 'current-password') + '" value="' + EA(ui.pass) + '" data-on-input="' + R(function (e) { ui.pass = e.target.value; ui.err = ''; }) + '" style="' + FIN + '">'
-    + (su ? '<label for="lg-pass2" style="' + LBL + '">تأكيد كلمة المرور</label><input id="lg-pass2" type="password" dir="ltr" autocomplete="new-password" value="' + EA(ui.pass2) + '" data-on-input="' + R(function (e) { ui.pass2 = e.target.value; ui.err = ''; }) + '" style="' + FIN + '">' : '')
+  var body = '<form data-on-submit="' + R(submitAuth) + '" style="display: flex; flex-direction: column; gap: 12px">'
+    + '<p style="margin: 0; font-size: 15px; line-height: 1.7; color: #374151">اكتب اسمك بالإنجليزية أو رقمك المدرسي، ورمزاً سرياً من 4 أرقام. في أول مرة يُنشأ حسابك تلقائياً، وبعدها ادخل بنفس الاسم والرمز.</p>'
+    + '<label for="lg-user" style="' + LBL + '">اسم الطالب أو الرقم المدرسي</label>'
+    + '<input id="lg-user" dir="ltr" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="مثال: sara2025" value="' + EA(ui.user) + '" data-on-input="' + R(function (e) { ui.user = e.target.value; ui.err = ''; }) + '" style="' + FIN + '">'
+    + '<label for="lg-pass" style="' + LBL + '">الرمز السري (4 أرقام)</label>'
+    + '<input id="lg-pass" type="password" inputmode="numeric" maxlength="8" dir="ltr" autocomplete="current-password" placeholder="••••" value="' + EA(ui.pass) + '" data-on-input="' + R(function (e) { ui.pass = e.target.value; ui.err = ''; }) + '" style="' + FIN + '; letter-spacing: 8px">'
     + errBox()
-    + '<button type="submit" style="' + BTN1 + '"' + (ui.busy ? ' disabled' : '') + '>' + (ui.busy ? 'لحظة…' : (su ? 'إنشاء الحساب' : 'دخول')) + '</button>'
-    + (su ? '' : '<p style="margin: 0; font-size: 13px; line-height: 1.7; color: #6B7280">نسيت كلمة المرور؟ راجع معلمك.</p>')
+    + '<button type="submit" style="' + BTN1 + '"' + (ui.busy ? ' disabled' : '') + '>' + (ui.busy ? 'لحظة…' : 'دخول') + '</button>'
+    + '<p style="margin: 0; font-size: 13px; line-height: 1.7; color: #6B7280">نسيت الرمز؟ راجع معلمك.</p>'
     + '</form>';
   return wrap('<div style="' + CARD + '">' + brand() + body + '</div>');
 }
