@@ -12947,8 +12947,10 @@ async function submitAuth() {
       : /LOCKED/.test(m) ? 'محاولات خاطئة كثيرة. حاول مرة أخرى بعد 10 دقائق.'
       : /BAD_USERNAME/.test(m) ? 'اسم المستخدم يجب أن يكون من 3 إلى 30 حرفاً إنجليزياً أو رقماً، بدون مسافات.'
       : /SHORT_PASSWORD/.test(m) ? 'الرمز السري يجب أن يكون 4 أرقام على الأقل.'
-      : /kid_(enter|register|login)|function|schema cache/i.test(m) ? 'قاعدة البيانات غير مجهّزة بعد: نفّذي ملف accounts-setup.sql في Supabase (SQL Editor).'
-      : 'حدث خطأ: ' + m;
+      : (/kid_enter/i.test(m) && /(could not find|does not exist|schema cache)/i.test(m)) ? 'قاعدة البيانات غير مجهّزة بعد: يجب تنفيذ ملف accounts-setup.sql في Supabase (SQL Editor).'
+      : 'حدث خطأ';
+    var det = [res.error.code, m, res.error.details, res.error.hint].filter(Boolean).join(' | ');
+    ui.err += '\n(التفاصيل التقنية: ' + det + ')';
     schedule(); return;
   }
   if (!res.data || !res.data.token) { ui.err = 'الرمز السري غير صحيح لهذا الاسم. إذا كان هذا أول دخول لك، اختر اسماً آخر لأن هذا الاسم مستخدم من قبل.'; schedule(); return; }
@@ -12972,7 +12974,7 @@ function brand() {
   return '<div style="display: flex; align-items: center; gap: 12px"><div aria-hidden="true" style="width: 48px; height: 48px; border-radius: 14px; background: #B3122B; color: #FFFFFF; display: flex; align-items: center; justify-content: center; font-size: 26px; font-weight: 800">م</div>'
     + '<div><div style="font-family: \'Readex Pro\', sans-serif; font-weight: 700; font-size: 22px; color: #1F2A37">المدارس الأردنية</div><div style="font-size: 15px; color: #4B5563">صياغة السيرة الذاتية</div></div></div>';
 }
-function errBox() { return ui.err ? '<div role="alert" style="font-size: 16px; line-height: 1.6; color: #9F1239; background: #FFF1F3; border: 1px solid #F3C4CF; border-radius: 12px; padding: 10px 14px">' + ET(ui.err) + '</div>' : ''; }
+function errBox() { return ui.err ? '<div role="alert" style="white-space: pre-line; word-break: break-word; font-size: 16px; line-height: 1.6; color: #9F1239; background: #FFF1F3; border: 1px solid #F3C4CF; border-radius: 12px; padding: 10px 14px">' + ET(ui.err) + '</div>' : ''; }
 function LOGIN() {
   if (ui.phase === 'boot') return wrap('<div style="font-size: 18px; color: #4B5563">جارٍ التحميل…</div>');
   if (ui.phase === 'nocfg') return wrap('<div style="' + CARD + '">' + brand() + '<p style="margin: 0; font-size: 17px; line-height: 1.8">لم يتم إعداد الاتصال بـ Supabase بعد. افتح ملف <b dir="ltr">config.js</b> وتأكد أن رابط المشروع صحيح، وأن المفتاح العام (anon / publishable) منسوخ كاملاً بين علامتي الاقتباس.</p></div>');
